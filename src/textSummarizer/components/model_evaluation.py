@@ -8,8 +8,8 @@ from datasets import load_from_disk
 from evaluate import load
 from tqdm import tqdm
 from textSummarizer.entity import ModelEvaluationConfig
-
-
+from transformers import GenerationConfig
+from transformers import AutoConfig
 
 class ModelEvaluation:
     def __init__(self, config: ModelEvaluationConfig):
@@ -22,7 +22,7 @@ class ModelEvaluation:
         for i in range(0, len(list_of_elements), batch_size):
             yield list_of_elements[i:i + batch_size]
             
-    def calculate_metric_on_test_ds(self, dataset, metric, model, tokenizer, 
+    def calculate_metric_on_test_ds(self, dataset, metric, model, tokenizer, generation_config,
                                   batch_size=16, device="cuda" if torch.cuda.is_available() else "cpu", 
                                   column_text="dialogue", column_summary="summary"):
         
@@ -45,12 +45,7 @@ class ModelEvaluation:
                 summaries = model.generate(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
-                    length_penalty=0.8,
-                    num_beams=8,
-                    max_length=128,
-                    min_length=30,
-                    early_stopping=True,
-                    no_repeat_ngram_size=3
+                    generation_config=generation_config
                 )
             
             decoded_summaries = [
@@ -68,14 +63,26 @@ class ModelEvaluation:
     
     def evaluate(self):
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+        config = AutoConfig.from_pretrained(self.config.model_path)
+        config.forced_bos_token_id = 0
         # Load tokenizer and model
         tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_path)
         model = AutoModelForSeq2SeqLM.from_pretrained(
             self.config.model_path,
-            forced_bos_token_id=0
+            config = config
         ).to(device)
         model.eval()
+        
+        generation_config = GenerationConfig(
+        max_length=128,
+        min_length=40,
+        length_penalty=1.2,
+        num_beams=8,
+        early_stopping=True,
+        no_repeat_ngram_size=3,
+        do_sample = True,
+        forced_bos_token_id=0
+        )
         
         # Load dataset and metric
         dataset_samsum_pt = load_from_disk(self.config.data_path)
@@ -84,11 +91,12 @@ class ModelEvaluation:
         
         # Calculate scores
         score = self.calculate_metric_on_test_ds(
-            dataset_samsum_pt['test'][0:10],
+            dataset_samsum_pt['test'],
             rouge_metric,
             model,
-            tokenizer,
-            batch_size=2
+            tokenizer,generation_config,
+            batch_size=8,
+            
         )
         
         # Process and save results
