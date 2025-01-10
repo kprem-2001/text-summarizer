@@ -1,4 +1,4 @@
-name: workflow
+name: Deploy FastAPI to AWS
 
 on:
   push:
@@ -12,31 +12,24 @@ permissions:
   contents: read
 
 jobs:
-  integration:
-    name: Continuous Integration
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Lint code
-        run: echo "Linting repository"
-
-      - name: Run unit tests
-        run: echo "Running unit tests"
-
   build-and-push-ecr-image:
-    name: Continuous Delivery
-    needs: integration
+    name: Build and Push to ECR
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
 
       - name: Install Utilities
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
         with:
@@ -48,26 +41,23 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build, tag, and push image to Amazon ECR
+      - name: Build, Tag, and Push Docker Image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          
-          
-  Continuous-Deployment:
+
+  deploy-to-ecs:
+    name: Deploy to ECS
     needs: build-and-push-ecr-image
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v3
 
       - name: Configure AWS credentials
@@ -77,22 +67,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-      
-      
-      - name: Pull latest images
+      - name: Deploy Service to ECS
         run: |
-         docker pull ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-         
-      - name: Stop and remove container if running
-        run: |
-         docker ps -q --filter "name=texts" | grep -q . && docker stop texts && docker rm -fv texts
-       
-      - name: Run Docker Image to serve users
-        run: |
-         docker run -d -p 8080:8080 --name=texts -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' -e 'AWS_REGION=${{ secrets.AWS_REGION }}'  ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-      - name: Clean previous images and containers
-        run: |
-         docker system prune -f
+          aws ecs update-service \
+            --cluster ${{ secrets.ECS_CLUSTER_NAME }} \
+            --service ${{ secrets.ECS_SERVICE_NAME }} \
+            --force-new-deployment
