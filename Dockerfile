@@ -1,32 +1,13 @@
-FROM python:3.9-slim-bullseye
+FROM python:3.9-slim-buster
 
-ENV PYTHONUNBUFFERED=1
-
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    awscli \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN apt update -y && apt install awscli -y
 WORKDIR /app
 
-# Copy requirements first
-COPY requirements.txt .
+COPY . /app
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --upgrade accelerate transformers
+RUN pip install -r requirements.txt
+RUN pip install --upgrade accelerate
+RUN pip uninstall -y transformers accelerate
+RUN pip install transformers accelerate
 
-# Copy application files
-COPY . .
-
-# Expose the port
-EXPOSE 8080
-
-# Add healthcheck
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/ || exit 1
-
-# Run the application
 CMD ["python3", "app.py"]
